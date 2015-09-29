@@ -1,522 +1,337 @@
-// Simulate the bare minimum of the view that exists on the main site 
- var Scratch = Scratch || {}; 
- Scratch.FlashApp = Scratch.FlashApp || {}; 
- 
- 
- var editorId = "scratch"; 
- var initialPage = "home"; 
- var ShortURL = { 
-     key : "AIzaSyBlaftRUIOLFVs8nfrWvp4IBrqq9-az46A", 
-     api : "https://www.googleapis.com/urlshortener/v1/url", 
-     domain : "http://goo.gl" 
- } 
- 
- 
- function handleEmbedStatus(e) { 
-     $('#scratch-loader').hide(); 
-     var scratch = $(document.getElementById(editorId)); 
-     if (!e.success) { 
-        scratch.css('marginTop', '10'); 
-         scratch.find('IMG.proj_thumb').css('width', '179px'); 
-         scratch.find('DIV.scratch_unsupported').show(); 
-       scratch.find('DIV.scratch_loading').hide(); 
-     } else { 
-         Scratch.FlashApp.ASobj = scratch[0]; 
-         Scratch.FlashApp.$ASobj = $(Scratch.FlashApp.ASobj); 
-     } 
- } 
- 
- 
- // enables the SWF to log errors 
- function JSthrowError(e) { 
-     if (window.onerror) window.onerror(e, 'swf', 0); 
-     else console.error(e); 
- } 
- 
- 
- function JSeditorReady() { 
-     try { 
-        handleParameters(); 
-         Scratch.FlashApp.$ASobj.trigger("editor:ready"); 
-         return true; 
-     } catch (error) { 
-         console.error(error.message, "\n", error.stack); 
-         throw error; 
-     } 
-  } 
- 
- 
- function JSprojectLoaded() { 
-     loadExtensionQueue(); 
- } 
- 
- 
- function JSshowExtensionDialog() { 
-     showModal(["template-extension-file", "template-extension-url"]); 
- } 
- 
- 
- var extensionQueue = []; 
- function handleParameters() { 
-     var project; 
-     var queryString = window.location.search.substring(1); 
-     var queryVars = queryString.split(/[&;]/); 
-     for (var i = 0; i < queryVars.length; i++) { 
-        var nameVal = queryVars[i].split('='); 
-         switch(nameVal[0]){ 
-             case 'ext': 
-                 extensionQueue.push(nameVal[1]); 
-                 break; 
-             case 'proj': 
-                 project = nameVal[1]; 
-                                  break; 
-         } 
-     } 
-     if (project) { 
-         Scratch.FlashApp.ASobj.ASloadSBXFromURL(project); 
-     } 
-     else { 
-         loadExtensionQueue(); 
-     } 
- } 
- 
- 
- function loadExtensionQueue() { 
-     for (var i = 0; i < extensionQueue.length; ++i)
-     { 
-         var extensionURL = extensionQueue[i];  
-         ScratchExtensions.loadExternalJS(extensionURL); 
-              } 
-     extensionQueue = []; 
- } 
+// scratch_ext.js
+// Shane M. Clements, November 2013
+// ScratchExtensions
+//
+// Scratch 2.0 extension manager which Scratch communicates with to initialize extensions and communicate with them.
+// The extension manager also handles creating the browser plugin to enable access to HID and serial devices.
+window.ScratchExtensions = new (function () {
+    var plugin = null;
+    var handlers = {};
+    var blockDefs = {};
+    var menuDefs = {};
+    var deviceSpecs = {};
+    var devices = {};
+    var poller = null;
+    var lib = this;
 
- 
-    var flashVars = { 
-     autostart: 'false', 
-     extensionDevMode: 'true', 
-     server: encodeURIComponent(location.host), 
-     cloudToken: '4af4863d-a921-4004-b2cb-e0ad00ee1927', 
-     cdnToken: '34f16bc63e8ada7dfd7ec12c715d0c94', 
-     urlOverrides: { 
-         sitePrefix: "http://scratch.mit.edu/", 
-         siteCdnPrefix: "http://cdn.scratch.mit.edu/", 
-         assetPrefix: "http://assets.scratch.mit.edu/", 
-         assetCdnPrefix: "http://cdn.assets.scratch.mit.edu/", 
-         projectPrefix: "http://projects.scratch.mit.edu/", 
-         projectCdnPrefix: "http://cdn.projects.scratch.mit.edu/", 
-         internalAPI: "internalapi/", 
-         siteAPI: "site-api/", 
-        staticFiles: "scratchr2/static/" 
-     }, 
-     inIE: (navigator.userAgent.indexOf('MSIE') > -1) 
- }; 
+    var isOffline = (Scratch && Scratch.FlashApp && Scratch.FlashApp.ASobj &&
+            Scratch.FlashApp.ASobj.isOffline && Scratch.FlashApp.ASobj.isOffline());
+    var pluginAvailable = function () {
+        return !!window.ArrayBuffer && !!(
+                isOffline ||
+                (window.ScratchPlugin && window.ScratchPlugin.isAvailable()) ||
+                (window.ScratchDeviceHost && window.ScratchDeviceHost.isAvailable())
+            );
+    };
 
- 
- var params = { 
-     allowscriptaccess: 'always', 
-     allowfullscreen: 'true', 
-     wmode: 'direct', 
-     menu: 'false' 
- }; 
- 
- 
- $.each(flashVars, function (prop, val) { 
-     if ($.isPlainObject(val)) 
-         flashVars[prop] = encodeURIComponent(JSON.stringify(val)); 
- }); 
- 
- 
- swfobject.switchOffAutoHideShow(); 
+    lib.register = function (name, descriptor, handler, deviceSpec) {
+        if (name in handlers) {
+            console.log('Scratch extension "' + name + '" already exists!');
+            return false;
+        }
 
- 
- swfobject.embedSWF('Scratch.swf', 'scratch', '100%', '100%', '11.7.0', 'libs/expressInstall.swf', 
-        flashVars, params, null, handleEmbedStatus); 
- 
- 
- 
- 
-   /* File uploads */ 
-  function sendFileToFlash(file) { 
-      /* 
-       * Use the HTML5 FileReader API to send base-64 encoded file 
-       * contents to Flash via ASloadBase64SBX (or do it when the SWF 
-       * is ready). 
-       */
-      var fileReader = new FileReader(); 
-      fileReader.onload = function (e) { 
-          var fileAsB64 = ab_to_b64(fileReader.result); 
-          if (Scratch.FlashApp.ASobj.ASloadBase64SBX !== undefined) { 
-              $(document).trigger("editor:extensionLoaded", {method: "file"}); 
-              showPage(editorId); 
-             Scratch.FlashApp.ASobj.ASloadBase64SBX(fileAsB64); 
-          } else { 
-              $(document).on("editor:ready", function(e) { 
-                  $(document).trigger("editor:extensionLoaded", {method: "file"}); 
-                  showPage(editorId); 
-                  Scratch.FlashApp.ASobj.ASloadBase64SBX(fileAsB64); 
-                  $(this).off(e); 
-              }); 
-          } 
-           
-     } 
-      fileReader.readAsArrayBuffer(file); 
-  } 
-  
- 
-  function sendURLtoFlash() { 
-      /* 
-       * Send a URL to Flash with ASloadGithubURL, or do it when the 
-       * editor is ready. 
-       */ 
-      var urls = []; 
-     for (var i = 0; i < arguments.length; i++) { 
-            urls.push(arguments[i]); 
-      } 
-      if (urls.length <= 0) return; 
-      if (Scratch.FlashApp.ASobj.ASloadGithubURL !== undefined) { 
-          $(document).trigger("editor:extensionLoaded", {method: "url", urls: urls}); 
-         showPage(editorId); 
-         Scratch.FlashApp.ASobj.ASloadGithubURL(urls); 
-    } else { 
-         $(document).on("editor:ready",  function(e) {
-         $(document).trigger("editor:extensionLoaded", {method: "url", urls: urls}); 
-             showPage(editorId); 
-             Scratch.FlashApp.ASobj.ASloadGithubURL(urls); 
-             $(this).off(e); 
-         }); 
-     } 
- } 
- 
- 
- 
- 
- /* Load from URL */ 
- 
- 
-function loadFromURLParameter(queryString) { 
-    /* 
-     * Get all url=urlToLoad from the querystring and send to Flash 
-     * Use like... 
-     *     http://scratchx.org/?url=urlToLoad1&url=urlToLoad2 
-     */ 
-     var paramString = queryString.replace(/^\?|\/$/g, ''); 
-    var vars = paramString.split("&"); 
-     var showedEditor = false; 
-    var urls = []; 
-     for (var i=0; i<vars.length; i++) { 
-         var pair = vars[i].split("="); 
-         if (pair.length > 1 && pair[0]=="url") { 
-            urls.push(pair[1]); 
-190         } 
-191     } 
-192     if (urls.length > 0) sendURLtoFlash.apply(window, urls); 
-193 } 
- 
-   /* Modals */ 
- 
-function getOrCreateFromTemplate(elementId, templateId, elementType, appendTo, wrapper, data) { 
-   elementType = elementType || "div"; 
-   appendTo = appendTo || "body"; 
-   data = data || {}; 
-  var $element = $(document.getElementById(elementId)); 
-  if (!$element.length) { 
- var templateContent = ""; 
- if (typeof(templateId) != "string") { 
-   for (var id in templateId) { 
-         templateContent += $(document.getElementById(templateId[id])).html(); 
-       } 
-    } else { 
-       templateContent += $(document.getElementById(templateId)).html() 
-     } 
-     $template = _.template(templateContent); 
-       $element = $("<"+elementType+"></"+elementType+">") 
-       .attr("id", elementId) 
-          .html($template(data)); 
-       if (wrapper) $element.wrapInner(wrapper); 
-      $element.appendTo(appendTo) 
-    } 
-    return $element; 
-}; 
+        handlers[name] = handler;
+        blockDefs[name] = descriptor.blocks;
+        if (descriptor.menus) menuDefs[name] = descriptor.menus;
+        if (deviceSpec) deviceSpecs[name] = deviceSpec;
 
- 
- function showModal(templateId, data) { 
-     /* 
-    * Copies the HTML referenced by data-template into a new element, 
-      * with id="modal-[template value]" and creates an overlay on the 
-      * page, which when clicked will close the popup. 
-    */ 
+        // Show the blocks in Scratch!
+        var extObj = {
+            extensionName: name,
+            blockSpecs: descriptor.blocks,
+            url: descriptor.url,
+            menus: descriptor.menus,
+            javascriptURL: loadingURL
+        };
+        Scratch.FlashApp.ASobj.ASloadExtension(extObj);
 
- 
-    var zIndex = 100; 
-    var modalId = ("modal-" + templateId).replace(",", "-"); 
-    $modalwrapper = $("<div class='modal-fade-screen'><div class='modal-inner'></div></div>"); 
-    var $modal = getOrCreateFromTemplate(modalId, templateId, "dialog", "body", $modalwrapper, data); 
+	    if (deviceSpec) {
+		    if (!plugin) {
+			    if (pluginAvailable()) {
+				    // createDevicePlugin() will eventually call checkPolling() if it succeeds
+				    setTimeout(createDevicePlugin, 10);
+			    } else if (window.ScratchPlugin.useActiveX) {
+				    JSsetProjectBanner('Sorry, your version of Internet Explorer is not supported.  Please upgrade to version 10 or 11.');
+			    }
+		    }
+		    else {
+			    // Second hardware-using project in the same tab
+			    checkPolling();
+		    }
+	    }
 
- 
-    $modal.addClass("modal"); 
+        return true;
+    };
 
- 
-    $(".modal-fade-screen", $modal) 
-       .addClass("visible") 
-       .click(function(e){if ($(e.target).is($(this))) $(this).trigger("modal:exit")}); 
- 
- 
-     $(".modal-close", $modal).click(function(e){ 
-         e.preventDefault(); 
-         $(document).trigger("modal:exit") 
-     }); 
-      
-     $("body").addClass("modal-open"); 
- 
- 
-    $(document).one("modal:exit page:show editor:extensionLoaded", function(e){ 
-        $("body").removeClass("modal-open"); 
-        Scratch.FlashApp.ASobj.ASsetModalOverlay(false); 
-        $modal.remove(); 
-    }); 
-      
-    return $modal; 
-} 
- 
- 
- $(document).keyup(function(e) { 
-    // Exit modals with esc key 
-    if (e.keyCode == 27) $(document).trigger("modal:exit"); 
- }); 
+    var loadingURL;
+    lib.loadExternalJS = function (url) {
+        var scr = document.createElement("script");
+        scr.src = url;// + "?ts=" + new Date().getTime();
+        loadingURL = url;
+        document.getElementsByTagName("head")[0].appendChild(scr);
+    };
 
- 
-$(document).on("modal:exit", function(e){Scratch.FlashApp.ASobj.ASsetModalOverlay(false);}); 
+    lib.loadLocalJS = function (code) {
+        // Run the extension code in the global scope
+        try {
+            (new Function(code))();
+        } catch (e) {
+            console.log(e.stack.toString());
+        }
+    };
 
- 
- $(document).on('click', "[data-action='modal']", function(e){ 
-    /* 
-     * Usage: 
-     *     <a href="#content" data-action="modal" data-template="id-for-content">Popup</a> 
-    */ 
+    lib.unregister = function (name) {
+        try { handlers[name]._shutdown(); } catch (e) { }
+        delete handlers[name];
+        delete blockDefs[name];
+        delete menuDefs[name];
+        delete deviceSpecs[name];
+    };
 
- 
-     e.preventDefault(); 
-    showModal($(this).data("template")); 
- }); 
+    lib.canAccessDevices = function () { return pluginAvailable(); };
+    lib.getReporter = function (ext_name, reporter, args) {
+        return handlers[ext_name][reporter].apply(handlers[ext_name], args);
+    };
 
- 
- function JSshowWarning(extensionData) { 
-     $modal = showModal("template-warning", extensionData); 
-    $("button", $modal).click(function(e){ 
-        e.preventDefault(); 
-          $(document).trigger("modal:exit") 
-   }); 
- }
- 
- /* Page switching */ 
- function showPage(path, force) { 
-   /* 
-    Show a part of the page.  The site is set up like 
-286      body 
-287        main 
-288          article#home 
-289          article#privacy-policy 
-290          ... 
-291        editor 
-292       
-293      Each <article> is a "page" of the site, plus one special 
-294      view, which is the editor. 
-295       
-296      The editor is not actually hidden, but located -9999px above 
-297      the viewport. This is because if it's hidden, it doesn't load 
-298      when the page is loaded. 
-299           So first we have to hide everything that we're not going to show 
-300      or move the editor up, then display everything we're going to show 
-301      if it's hidden. 
-302           If we are linking to an anchor within a page, then show its parent. 
-303     */ 
-    var toHide = "body > main, body > main > article"; 
-    var toShow = "#" + path; 
-    var $toShow = $(toShow); 
-   var showEditor = $toShow.is(Scratch.FlashApp.$ASobj); 
-   var editorShown = parseInt(Scratch.FlashApp.$ASobj.css("top")) == 0; 
- 
-    if (!$toShow.length || (!showEditor && $toShow.filter(":visible").length > 0) || (showEditor && editorShown)) return; 
-    
-     if (editorShown && !force) { 
-        Scratch.FlashApp.ASobj.AScreateNewProject(["showPage", path, true]); 
-        return; 
-     } 
- 
- 
-     $(toHide).filter(":visible").hide(); 
-     if (!showEditor && editorShown) $(document.getElementById(editorId)).css({top: "-9999px"}); 
-     $("body > main, body > main > article").has($toShow).show(); 
-     setBodyClass(path); 
-     $toShow.show(); 
+    lib.getReporterAsync = function (ext_name, reporter, args, job_id) {
+        var callback = function (retval) {
+            Scratch.FlashApp.ASobj.ASextensionReporterDone(ext_name, job_id, retval);
+        }
+        args.push(callback);
+        handlers[ext_name][reporter].apply(handlers[ext_name], args);
+    };
 
-    if (showEditor) $toShow.css({top: 0}); 
-     
-    if (document.location.hash.substr(1) != path) document.location.hash = path; 
-     $toShow[0].scrollIntoView(true); 
-    $(document).trigger("page:show", path); 
-} 
+    lib.getReporterForceAsync = function (ext_name, reporter, args, job_id) {
+        var retval = handlers[ext_name][reporter].apply(handlers[ext_name], args);
+        Scratch.FlashApp.ASobj.ASextensionReporterDone(ext_name, job_id, retval);
+    };
 
- 
- function setBodyClass(path) { 
-     var pageClassPrefix = "page-"; 
-     var currentPageClasses = ($("body").attr("class") || "").split(" "); 
-    for (c in currentPageClasses) { 
-        if (currentPageClasses[c].indexOf(pageClassPrefix) != -1) { 
-             $("body").removeClass(currentPageClasses[c]); 
-        } 
-    } 
-    $("body").addClass(pageClassPrefix + path); 
- } 
- 
-/* URL Shortening */ 
- function shorten(url, done) { 
-     var data = {longUrl: url}; 
-     $.ajax({ 
-         url : ShortURL.api + '?' + $.param({key : ShortURL.key}), 
-         type : "post", 
-        data : JSON.stringify(data), 
-        dataType : "json", 
-        contentType : "application/json" 
-    }).done(done); 
- } 
- 
- 
-function getUrlFor(extensions) { 
-     return document.location.origin + '/?' + $.param( 
-         extensions.map(function(url){ 
-             return {name: 'url', value: url} 
-         }) 
-    ); 
- } 
+    lib.runCommand = function (ext_name, command, args) {
+        handlers[ext_name][command].apply(handlers[ext_name], args);
+    };
 
- 
- function UrlParser(url) { 
-    parser = document.createElement('a'); 
-    parser.href = url; 
-    return parser 
- } 
+    lib.runAsync = function (ext_name, command, args, job_id) {
+        var callback = function () {
+            Scratch.FlashApp.ASobj.ASextensionCallDone(ext_name, job_id);
+        }
+        args.push(callback);
+        handlers[ext_name][command].apply(handlers[ext_name], args);
+    };
 
- 
-function showShortUrl(url) { 
-     shorten(url, function(data) { 
-         var parser = UrlParser(data.id); 
-        var id = parser.pathname.replace('/', ''); 
-        parser.href = window.location.origin; 
-        parser.hash = "#!" + id; 
-         var shortUrl = parser.href; 
-       var context = { 
-            longUrl : data.longUrl, 
-             shortUrl : shortUrl 
-         } 
- 
- 
-        $modal = showModal("template-short-url", context); 
-        var client = new ZeroClipboard($('button', $modal)); 
-    }); 
-} 
+    lib.getStatus = function (ext_name) {
+        if (!(ext_name in handlers))
+            return { status: 0, msg: 'Not loaded' };
 
- 
- function JSshowShortUrlFor() { 
-     showShortUrl(getUrlFor(Array.prototype.slice.call(arguments))); 
-} 
+        if (ext_name in deviceSpecs && !pluginAvailable())
+            return { status: 0, msg: 'Missing browser plugin' };
 
- function decompress(id, done) { 
-     var data = {shortUrl: ShortURL.domain + id} 
-     $.ajax({ 
-        url : ShortURL.api + '?' + $.param({ 
-            key : ShortURL.key, 
-             shortUrl : ShortURL.domain + '/' + id}), 
-        dataType : "json", 
-         contentType : "application/json" 
-   }).done(done); 
- } 
+        return handlers[ext_name]._getStatus();
+    };
 
- 
- /* Setup */ 
+    lib.notify = function (text) {
+        if (window.JSsetProjectBanner) JSsetProjectBanner(text);
+        else alert(text);
+    };
 
- 
- $(document).on('click', "[data-action='load-file']", function(e) { 
-    /* 
-     Buttons with data-action="load-file" trigger a file input 
-     prompt, passed to a handler that passes the file to Flash. 
-     */ 
-    $('<input type="file" />').on('change', function(){ 
-         sendFileToFlash(this.files[0]) 
-     }).click(); 
- }); 
+    lib.resetPlugin = function () {
+        if (plugin && plugin.reset) plugin.reset();
+        shutdown();
+    };
 
- 
- $(document).on('click', "[data-action='load-url']", function(e) { 
-     /* 
-    Links with data-action="load-url" send their href to Flash 
-    So use like... 
-       <a href="?url=urlToLoad" data-action="load-url">Load this</a> 
-    */ 
-     e.preventDefault(); 
-     showPage(editorId); 
-    loadFromURLParameter($(this).attr("href")); 
- }) 
- 
-  $(document).on('submit', ".url-load-form", function(e) { 
-     // Load text input value on submit 
-     e.preventDefault() 
-     showPage(editorId); 
-    sendURLtoFlash($('input[type="text"]', this).val()); 
-  })
- 
- $(document).on('click', "[data-action='show']", function(e) { 
-  /*
-    Links with data-action="static-link" should switch the view 
-     to that page. Works like tabs sort of. Use like... 
-         <!-- Makes a link to the Privacy Policy section --> 
-         <a href="#privacy-policy" data-action="static-link">Privacy Policy</a> 
-    */ 
-    var path = $(this).data('target') || $(this).attr("href").substring(1); 
-     showPage(path); 
- }); 
- 
- 
-  $(window).on('hashchange', function(e) { 
-     var path = document.location.hash.split('#')[1] || document.location.hash || 'home'; 
-      if (path.charAt(0) != '!') showPage(path); 
-  }); 
- 
- 
- $(document).on("page:show", function(e, page){ 
-      ga("send", "pageview", '#' + page); 
-     ga("set", "referrer", document.location.origin + document.location.pathname + document.location.hash) 
- }); 
- 
- 
-  $(document).on("editor:extensionLoaded", function(e, data){ 
-      if (data.method == "url") { 
-          for (var i = 0; url = data['urls'][i]; i++) { 
-             ga("send", "event", "extensionLoaded", data.method, url); 
-        } 
-     } else { 
-          ga("send", "event", "extensionLoaded", data.method); 
-     } 
- }); 
- 
- 
-  function initPage() { 
-      /* 
-      On load, show the page identified by the URL fragment. Default to #home. 
-     */ 
-     if (window.location.hash) { 
-         if (window.location.hash.charAt(1) == "!") { 
-           decompress(window.location.hash.substr(2), function(data) { 
-                 var parser = UrlParser(data.longUrl); 
-                 if (parser.hostname == window.location.hostname) window.location = data.longUrl; 
-                 return; 
-             }); 
-          } else { 
-            initialPage = window.location.hash.substr(1); 
-          } 
-    } 
-     setBodyClass(initialPage); 
-      showPage(initialPage, true); 
-      loadFromURLParameter(window.location.search, true); 
-  } 
- $(initPage); 
+    $(window).unload(function (e) {
+        shutdown();
+    });
+
+    function shutdown() {
+        for (var extName in handlers)
+            handlers[extName]._shutdown();
+        handlers = {};
+        stopPolling();
+    }
+
+    function checkDevices() {
+        var awaitingSpecs = {};
+        for (var ext_name in deviceSpecs)
+            if (!devices[ext_name]) {
+                var spec = deviceSpecs[ext_name];
+                if (spec.type == 'hid') {
+                    if (!awaitingSpecs['hid']) awaitingSpecs['hid'] = {};
+                    awaitingSpecs['hid'][spec.vendor + '_' + spec.product] = ext_name;
+                }
+                else if (spec.type == 'serial')
+                    awaitingSpecs['serial'] = ext_name;
+            }
+
+        if (awaitingSpecs['hid']) {
+            plugin.hid_list(function (deviceList) {
+                var hidList = awaitingSpecs['hid'];
+                for (var i = 0; i < deviceList.length; i++) {
+                    var ext_name = hidList[deviceList[i]["vendor_id"] + '_' + deviceList[i]["product_id"]];
+                    if (ext_name)
+                        handlers[ext_name]._deviceConnected(new hidDevice(deviceList[i], ext_name));
+                }
+            });
+        }
+
+        if (awaitingSpecs['serial']) {
+            var ext_name = awaitingSpecs['serial'];
+            plugin.serial_list(function (deviceList) {
+                for (var i = 0; i < deviceList.length; i++) {
+                    handlers[ext_name]._deviceConnected(new serialDevice(deviceList[i], ext_name));
+                }
+            });
+        }
+
+        if (!shouldLookForDevices())
+            stopPolling();
+    }
+
+    function checkPolling() {
+        if (poller || !shouldLookForDevices()) return;
+
+        poller = setInterval(checkDevices, 500);
+    }
+
+    function stopPolling() {
+        if (poller) clearInterval(poller);
+        poller = null;
+    }
+
+    function shouldLookForDevices() {
+        for (var ext_name in deviceSpecs)
+            if (!devices[ext_name])
+                return true;
+
+        return false;
+    }
+
+    function createDevicePlugin() {
+        if (plugin) return;
+
+        // TODO: delegate more of this to the other files
+        if (isOffline) {
+            // Talk to the AIR Native Extension through the offline editor's plugin emulation.
+            plugin = Scratch.FlashApp.ASobj.getPlugin();
+        } else if (window.ScratchDeviceHost && window.ScratchDeviceHost.isAvailable()) {
+            // Talk to the Native Messaging Host through a Chrome extension.
+            plugin = window.ScratchDeviceHost;
+        } else {
+            if (window.ScratchPlugin.useActiveX) {
+                // we must be on IE or similar
+                plugin = new ActiveXObject(window.ScratchPlugin.axObjectName);
+            } else {
+                // Not IE: try NPAPI
+                var pluginContainer = document.createElement('div');
+                document.getElementById('scratch').parentNode.appendChild(pluginContainer);
+                pluginContainer.innerHTML = '<object type="application/x-scratchdeviceplugin" width="1" height="1"> </object>';
+                plugin = pluginContainer.firstChild;
+            }
+            // Talk to the actual plugin, but make it pretend to be asynchronous.
+            plugin = new window.ScratchPlugin.PluginWrapper(plugin);
+        }
+
+        // Wait a moment to access the plugin and claim any devices that plugins are
+        // interested in.
+        setTimeout(checkPolling, 100);
+    }
+
+    function hidDevice(info, ext_name) {
+        var dev = null;
+        var self = this;
+
+        // TODO: add support for multiple devices per extension
+        //if(!(ext_name in devices)) devices[ext_name] = {};
+
+        this.id = info["path"];
+        this.info = info;
+
+        function disconnect() {
+            setTimeout(function () {
+                self.close();
+                handlers[ext_name]._deviceRemoved(self);
+            }, 0);
+        }
+
+        this.open = function (readyCallback) {
+            plugin.hid_open(self.id, function (d) {
+                dev = d;
+                dev.set_nonblocking(true);
+                //devices[ext_name][path] = self;
+                devices[ext_name] = self;
+
+                if (readyCallback) readyCallback(self);
+            });
+        };
+        this.close = function () {
+            if (!dev) return;
+            dev.close();
+            delete devices[ext_name];
+            dev = null;
+
+            checkPolling();
+        };
+        this.write = function (data, callback) {
+            if (!dev) return;
+            dev.write(data, function (len) {
+                if (len < 0) disconnect();
+                if (callback) callback(len);
+            });
+        };
+        this.read = function (callback, len) {
+            if (!dev) return null;
+            if (!len) len = 65;
+            dev.read(len, function (data) {
+                if (data.byteLength == 0) disconnect();
+                callback(data);
+            });
+        };
+    }
+
+    function serialDevice(id, ext_name) {
+        var dev = null;
+        var self = this;
+
+        // TODO: add support for multiple devices per extension
+        //if(!(ext_name in devices)) devices[ext_name] = {};
+
+        this.id = id;
+        this.open = function (opts, readyCallback) {
+            try {
+                plugin.serial_open(self.id, opts, function (d) {
+//                    dev.set_disconnect_handler(function () {
+//                        self.close();
+//                        handlers[ext_name]._deviceRemoved(self);
+//                    });
+//                    devices[ext_name][path] = self;
+                    dev = d;
+                    devices[ext_name] = self;
+
+                    dev.set_error_handler(function (message) {
+                        alert('Serial device error\n\nDevice: ' + id + '\nError: ' + message);
+                    });
+
+                    if (readyCallback) readyCallback(self);
+                });
+            }
+            catch (e) {
+                console.log('Error opening serial device ' + id + ': ' + e);
+            }
+        };
+        this.close = function () {
+            if (!dev) return;
+            dev.close();
+            delete devices[ext_name];
+            dev = null;
+
+            checkPolling();
+        };
+        this.send = function (data) {
+            if (!dev) return;
+            dev.send(data);
+        };
+        this.set_receive_handler = function (handler) {
+            if (!dev) return;
+            dev.set_receive_handler(handler);
+        };
+    }
+})();
