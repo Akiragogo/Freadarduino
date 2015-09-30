@@ -900,7 +900,7 @@
   var descriptor = {
     blocks: blocks[lang],
     menus: menus[lang],
-    url: 'http://Akiragogo.github.io/scratch_Freadarduino'
+    url: 'http://khanning.github.io/scratch-arduino-extension'
   };
 
   ScratchExtensions.register('Arduino', descriptor, ext, {type:'serial'});
